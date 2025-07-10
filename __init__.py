@@ -1,10 +1,10 @@
 bl_info = {
     "name": "Bone Aligner",
     "author": "maylog",
-    "version": (1, 0, 2),
+    "version": (1, 1, 0),
     "blender": (4, 0, 0),
     "location": "Properties > Data > Bone Aligner",
-    "description": "Align all bones with same name between active and selected armatures in Edit Mode",
+    "description": "Align bones in Edit Mode or add/clear Copy Transforms constraints in Pose Mode for matching bones",
     "category": "Rigging",
 }
 
@@ -13,30 +13,19 @@ import mathutils
 from bpy.types import Operator, Panel, Object
 from bpy.props import BoolProperty
 
-# Define scene property for case sensitivity
+# Define scene properties
 def register_scene_properties():
     """Register scene property for case sensitivity."""
     bpy.types.Scene.bone_aligner_case_sensitive = BoolProperty(
-        name="Case Sensitive",
-        description="Match bone names with case sensitivity",
-        default=True
+        name="Case Sensitive", description="Match bone names with case sensitivity", default=True
     )
 
 def compare_names(name1: str, name2: str, case_sensitive: bool) -> bool:
     """Compare bone names based on case sensitivity setting."""
-    if case_sensitive:
-        return name1 == name2
-    return name1.lower() == name2.lower()
+    return name1 == name2 if case_sensitive else name1.lower() == name2.lower()
 
 def get_sorted_bones(armature: Object) -> list:
-    """Return edit bones sorted by hierarchy (parents first) using non-recursive DFS.
-    
-    Args:
-        armature: The armature object containing edit bones.
-    
-    Returns:
-        List of edit bones sorted from root to leaf.
-    """
+    """Return edit bones sorted by hierarchy (parents first) using non-recursive DFS."""
     bones = list(armature.data.edit_bones)
     sorted_bones = []
     visited = set()
@@ -50,36 +39,27 @@ def get_sorted_bones(armature: Object) -> list:
 
     for bone in bones:
         topological_sort(bone)
-    
     return sorted_bones
 
 class BONEALIGNER_OT_AlignActiveToSelected(Operator):
-    """Align all bones in active armature to matching bones in selected armature."""
+    """Align all bones in active armature to matching bones in selected armature in Edit Mode."""
     bl_idname = "bonealigner.align_active_to_selected"
     bl_label = "Active to Selected"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
-        selected_armatures = [obj for obj in context.selected_objects if obj.type == 'ARMATURE' and obj != context.active_object]
-        return (context.active_object is not None and
+        selected_armatures = [obj for obj in context.selected_objects if obj.type == 'ARMATURE']
+        return (context.active_object and
                 context.active_object.type == 'ARMATURE' and
-                len(selected_armatures) > 0 and
+                len(selected_armatures) >= 2 and
                 context.mode == 'EDIT_ARMATURE')
 
     def execute(self, context):
         return self.align_bones(context, active_to_selected=True)
 
     def align_bones(self, context, active_to_selected: bool):
-        """Align bones between active and selected armatures.
-
-        Args:
-            context: Blender context.
-            active_to_selected: If True, align active to selected; else, selected to active.
-        
-        Returns:
-            {'FINISHED'} on success, {'CANCELLED'} on error.
-        """
+        """Align bones between active and selected armatures in Edit Mode."""
         active_armature = context.active_object
         case_sensitive = context.scene.bone_aligner_case_sensitive
         selected_armatures = [obj for obj in context.selected_objects if obj.type == 'ARMATURE' and obj != active_armature]
@@ -87,18 +67,17 @@ class BONEALIGNER_OT_AlignActiveToSelected(Operator):
         if not selected_armatures:
             self.report({'ERROR'}, "No other armature selected")
             return {'CANCELLED'}
-        selected_armature = selected_armatures[0]
+        selected_armature = selected_armatures[0]  # Use first selected armature
 
-        # Validate armatures
         if not active_armature.data.edit_bones or not selected_armature.data.edit_bones:
             self.report({'ERROR'}, "One or both armatures have no bones")
             return {'CANCELLED'}
 
-        # Create dictionary for selected bones to optimize lookup
         selected_bones = get_sorted_bones(selected_armature)
         selected_bone_dict = {bone.name: bone for bone in selected_bones}
         active_bones = get_sorted_bones(active_armature)
         aligned_count = 0
+        unmatched_bones = []
 
         for active_bone in active_bones:
             compare_name = active_bone.name if case_sensitive else active_bone.name.lower()
@@ -117,9 +96,11 @@ class BONEALIGNER_OT_AlignActiveToSelected(Operator):
                     target_bone.roll = active_bone.roll
                     self.report({'INFO'}, f"Aligned {target_bone.name} to {active_bone.name} in Edit Mode")
                 aligned_count += 1
+            else:
+                unmatched_bones.append(active_bone.name)
 
         if aligned_count == 0:
-            self.report({'WARNING'}, "No matching bones found between armatures")
+            self.report({'WARNING'}, f"No matching bones found. Active armature bones: {', '.join(unmatched_bones)}")
         else:
             self.report({'INFO'}, f"Aligned {aligned_count} bone(s)")
 
@@ -127,21 +108,143 @@ class BONEALIGNER_OT_AlignActiveToSelected(Operator):
         return {'FINISHED'}
 
 class BONEALIGNER_OT_AlignSelectedToActive(Operator):
-    """Align all bones in selected armature to matching bones in active armature."""
+    """Align all bones in selected armature to matching bones in active armature in Edit Mode."""
     bl_idname = "bonealigner.align_selected_to_active"
     bl_label = "Selected to Active"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
-        selected_armatures = [obj for obj in context.selected_objects if obj.type == 'ARMATURE' and obj != context.active_object]
-        return (context.active_object is not None and
+        selected_armatures = [obj for obj in context.selected_objects if obj.type == 'ARMATURE']
+        return (context.active_object and
                 context.active_object.type == 'ARMATURE' and
-                len(selected_armatures) > 0 and
+                len(selected_armatures) >= 2 and
                 context.mode == 'EDIT_ARMATURE')
 
     def execute(self, context):
         return BONEALIGNER_OT_AlignActiveToSelected.align_bones(self, context, active_to_selected=False)
+
+class BONEALIGNER_OT_AlignActiveToSelectedPose(Operator):
+    """Add Copy Transforms constraints to active armature's bones targeting selected armature in Pose Mode."""
+    bl_idname = "bonealigner.align_active_to_selected_pose"
+    bl_label = "Active to Selected"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        selected_armatures = [obj for obj in context.selected_objects if obj.type == 'ARMATURE']
+        return (context.active_object and
+                context.active_object.type == 'ARMATURE' and
+                len(selected_armatures) >= 1 and
+                context.mode == 'POSE')
+
+    def execute(self, context):
+        return self.add_constraints(context, active_to_selected=True)
+
+    def add_constraints(self, context, active_to_selected: bool):
+        """Add Copy Transforms constraints to matching bones in Pose Mode."""
+        active_armature = context.active_object
+        case_sensitive = context.scene.bone_aligner_case_sensitive
+        selected_armatures = [obj for obj in context.selected_objects if obj.type == 'ARMATURE' and obj != active_armature]
+        
+        if not selected_armatures:
+            self.report({'ERROR'}, "No other armature selected")
+            return {'CANCELLED'}
+        selected_armature = selected_armatures[0]
+
+        if not active_armature.data.bones or not selected_armature.data.bones:
+            self.report({'ERROR'}, "One or both armatures have no bones")
+            return {'CANCELLED'}
+
+        selected_bone_dict = {bone.name: bone for bone in selected_armature.pose.bones}
+        active_bones = [bone for bone in active_armature.pose.bones]
+        aligned_count = 0
+        unmatched_bones = []
+
+        for active_bone in active_bones:
+            compare_name = active_bone.name if case_sensitive else active_bone.name.lower()
+            target_bone = selected_bone_dict.get(compare_name if case_sensitive else compare_name.lower())
+            if target_bone:
+                source_armature = selected_armature if active_to_selected else active_armature
+                dest_armature = active_armature if active_to_selected else selected_armature
+                source_bone = target_bone if active_to_selected else active_bone
+                dest_bone = active_bone if active_to_selected else target_bone
+
+                for constraint in dest_bone.constraints:
+                    if (constraint.type == 'COPY_TRANSFORMS' and
+                        constraint.target == source_armature and
+                        constraint.subtarget == source_bone.name):
+                        dest_bone.constraints.remove(constraint)
+
+                constraint = dest_bone.constraints.new('COPY_TRANSFORMS')
+                constraint.target = source_armature
+                constraint.subtarget = source_bone.name
+                constraint.target_space = 'WORLD'
+                constraint.owner_space = 'WORLD'
+                constraint.mute = False
+
+                self.report({'INFO'}, f"Added constraint to {dest_bone.name} targeting {source_bone.name}")
+                aligned_count += 1
+            else:
+                unmatched_bones.append(active_bone.name)
+
+        if aligned_count == 0:
+            self.report({'WARNING'}, f"No matching bones found. Active armature bones: {', '.join(unmatched_bones)}")
+        else:
+            self.report({'INFO'}, f"Added constraints to {aligned_count} bone(s)")
+
+        context.view_layer.update()
+        return {'FINISHED'}
+
+class BONEALIGNER_OT_AlignSelectedToActivePose(Operator):
+    """Add Copy Transforms constraints to selected armature's bones targeting active armature in Pose Mode."""
+    bl_idname = "bonealigner.align_selected_to_active_pose"
+    bl_label = "Selected to Active"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        selected_armatures = [obj for obj in context.selected_objects if obj.type == 'ARMATURE']
+        return (context.active_object and
+                context.active_object.type == 'ARMATURE' and
+                len(selected_armatures) >= 1 and
+                context.mode == 'POSE')
+
+    def execute(self, context):
+        return BONEALIGNER_OT_AlignActiveToSelectedPose.add_constraints(self, context, active_to_selected=False)
+
+class BONEALIGNER_OT_ClearConstraints(Operator):
+    """Clear all constraints from selected pose bones in Pose Mode."""
+    bl_idname = "bonealigner.clear_constraints"
+    bl_label = "Clear Constraints"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return (context.active_object and
+                context.active_object.type == 'ARMATURE' and
+                context.mode == 'POSE')
+
+    def execute(self, context):
+        """Clear all constraints from selected pose bones."""
+        selected_bones = context.selected_pose_bones or []
+        if not selected_bones:
+            self.report({'ERROR'}, "No pose bones selected")
+            return {'CANCELLED'}
+
+        cleared_count = 0
+        for bone in selected_bones:
+            for constraint in bone.constraints:
+                bone.constraints.remove(constraint)
+                cleared_count += 1
+
+        if cleared_count == 0:
+            self.report({'INFO'}, "No constraints found to clear")
+        else:
+            self.report({'INFO'}, f"Cleared {cleared_count} constraint(s) from selected bones")
+
+        context.view_layer.update()
+        return {'FINISHED'}
 
 class BONEALIGNER_PT_Panel(Panel):
     """Panel for Bone Aligner in Armature Data Properties."""
@@ -154,31 +257,48 @@ class BONEALIGNER_PT_Panel(Panel):
 
     @classmethod
     def poll(cls, context):
-        selected_armatures = [obj for obj in context.selected_objects if obj.type == 'ARMATURE' and obj != context.active_object]
-        return (context.active_object and
-                context.active_object.type == 'ARMATURE' and
-                len(selected_armatures) > 0 and
-                context.mode == 'EDIT_ARMATURE')
+        selected_armatures = [obj for obj in context.selected_objects if obj.type == 'ARMATURE']
+        if context.mode == 'EDIT_ARMATURE':
+            return (context.active_object and
+                    context.active_object.type == 'ARMATURE' and
+                    len(selected_armatures) >= 2)
+        elif context.mode == 'POSE':
+            return (context.active_object and
+                    context.active_object.type == 'ARMATURE' and
+                    len(selected_armatures) >= 1)
+        return False
 
     def draw(self, context):
         layout = self.layout
         scene = context.scene
 
-        # UI controls
+        # Vertical layout for case sensitive and buttons
         layout.prop(scene, "bone_aligner_case_sensitive", text="Case Sensitive")
-        layout.operator(BONEALIGNER_OT_AlignActiveToSelected.bl_idname, text="Active to Selected")
-        layout.operator(BONEALIGNER_OT_AlignSelectedToActive.bl_idname, text="Selected to Active")
-        layout.label(text="Select two armatures to align their bones.")
+        if context.mode == 'EDIT_ARMATURE':
+            layout.operator(BONEALIGNER_OT_AlignActiveToSelected.bl_idname, text="Active to Selected")
+            layout.operator(BONEALIGNER_OT_AlignSelectedToActive.bl_idname, text="Selected to Active")
+            layout.label(text="Align all bone properties in Edit Mode.")
+        elif context.mode == 'POSE':
+            layout.operator(BONEALIGNER_OT_AlignActiveToSelectedPose.bl_idname, text="Active to Selected")
+            layout.operator(BONEALIGNER_OT_AlignSelectedToActivePose.bl_idname, text="Selected to Active")
+            layout.operator(BONEALIGNER_OT_ClearConstraints.bl_idname, text="Clear Constraints")
+            layout.label(text="Add or clear constraints in Pose Mode. Select bones and press Alt to change constraint space.")
 
 def register():
     register_scene_properties()
     bpy.utils.register_class(BONEALIGNER_OT_AlignActiveToSelected)
     bpy.utils.register_class(BONEALIGNER_OT_AlignSelectedToActive)
+    bpy.utils.register_class(BONEALIGNER_OT_AlignActiveToSelectedPose)
+    bpy.utils.register_class(BONEALIGNER_OT_AlignSelectedToActivePose)
+    bpy.utils.register_class(BONEALIGNER_OT_ClearConstraints)
     bpy.utils.register_class(BONEALIGNER_PT_Panel)
 
 def unregister():
     bpy.utils.unregister_class(BONEALIGNER_OT_AlignActiveToSelected)
     bpy.utils.unregister_class(BONEALIGNER_OT_AlignSelectedToActive)
+    bpy.utils.unregister_class(BONEALIGNER_OT_AlignActiveToSelectedPose)
+    bpy.utils.unregister_class(BONEALIGNER_OT_AlignSelectedToActivePose)
+    bpy.utils.unregister_class(BONEALIGNER_OT_ClearConstraints)
     bpy.utils.unregister_class(BONEALIGNER_PT_Panel)
     del bpy.types.Scene.bone_aligner_case_sensitive
 
