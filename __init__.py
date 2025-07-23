@@ -1,11 +1,11 @@
 bl_info = {
     "name": "Bone Aligner",
     "author": "maylog",
-    "version": (1, 1, 0),
+    "version": (1, 1, 1),
     "blender": (4, 0, 0),
     "location": "Properties > Data > Bone Aligner",
-    "description": "Align bones in Edit Mode or add/clear Copy Transforms constraints in Pose Mode for matching bones",
-    "category": "Rigging",
+    "description": "Align or rename bones in Edit Mode, or add/clear Copy Transforms constraints in Pose Mode",
+    "category": "Animation",
 }
 
 import bpy
@@ -67,7 +67,7 @@ class BONEALIGNER_OT_AlignActiveToSelected(Operator):
         if not selected_armatures:
             self.report({'ERROR'}, "No other armature selected")
             return {'CANCELLED'}
-        selected_armature = selected_armatures[0]  # Use first selected armature
+        selected_armature = selected_armatures[0]
 
         if not active_armature.data.edit_bones or not selected_armature.data.edit_bones:
             self.report({'ERROR'}, "One or both armatures have no bones")
@@ -93,7 +93,7 @@ class BONEALIGNER_OT_AlignActiveToSelected(Operator):
                     target_bone.head = active_bone.head
                     target_bone.tail = active_bone.tail
                     target_bone.matrix = active_bone.matrix.copy()
-                    target_bone.roll = active_bone.roll
+                    target_bone.roll = target_bone.roll
                     self.report({'INFO'}, f"Aligned {target_bone.name} to {active_bone.name} in Edit Mode")
                 aligned_count += 1
             else:
@@ -123,6 +123,82 @@ class BONEALIGNER_OT_AlignSelectedToActive(Operator):
 
     def execute(self, context):
         return BONEALIGNER_OT_AlignActiveToSelected.align_bones(self, context, active_to_selected=False)
+
+class BONEALIGNER_OT_RenameSelectedToActive(Operator):
+    """Rename selected bone to match active bone's name in Edit Mode."""
+    bl_idname = "bonealigner.rename_selected_to_active"
+    bl_label = "Selected to Active Name"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return (context.active_object and
+                context.active_object.type == 'ARMATURE' and
+                context.mode == 'EDIT_ARMATURE' and
+                len(context.selected_editable_bones) == 2)
+
+    def execute(self, context):
+        """Rename selected bone to active bone's name, handling conflicts."""
+        bones = context.selected_editable_bones
+        active_bone = context.active_bone
+        selected_bone = next(b for b in bones if b != active_bone)
+
+        if not active_bone or not selected_bone:
+            self.report({'ERROR'}, "Active or selected bone not found")
+            return {'CANCELLED'}
+
+        if active_bone.name == selected_bone.name:
+            self.report({'WARNING'}, f"Selected bone already named '{active_bone.name}'")
+            return {'CANCELLED'}
+
+        try:
+            old_name = selected_bone.name
+            selected_bone.name = active_bone.name
+            self.report({'INFO'}, f"Renamed bone '{old_name}' to '{selected_bone.name}'")
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to rename bone: {str(e)}")
+            return {'CANCELLED'}
+
+        context.view_layer.update()
+        return {'FINISHED'}
+
+class BONEALIGNER_OT_RenameActiveToSelected(Operator):
+    """Rename active bone to match selected bone's name in Edit Mode."""
+    bl_idname = "bonealigner.rename_active_to_selected"
+    bl_label = "Active to Selected Name"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return (context.active_object and
+                context.active_object.type == 'ARMATURE' and
+                context.mode == 'EDIT_ARMATURE' and
+                len(context.selected_editable_bones) == 2)
+
+    def execute(self, context):
+        """Rename active bone to selected bone's name, handling conflicts."""
+        bones = context.selected_editable_bones
+        active_bone = context.active_bone
+        selected_bone = next(b for b in bones if b != active_bone)
+
+        if not active_bone or not selected_bone:
+            self.report({'ERROR'}, "Active or selected bone not found")
+            return {'CANCELLED'}
+
+        if active_bone.name == selected_bone.name:
+            self.report({'WARNING'}, f"Active bone already named '{selected_bone.name}'")
+            return {'CANCELLED'}
+
+        try:
+            old_name = active_bone.name
+            active_bone.name = selected_bone.name
+            self.report({'INFO'}, f"Renamed bone '{old_name}' to '{active_bone.name}'")
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to rename bone: {str(e)}")
+            return {'CANCELLED'}
+
+        context.view_layer.update()
+        return {'FINISHED'}
 
 class BONEALIGNER_OT_AlignActiveToSelectedPose(Operator):
     """Add Copy Transforms constraints to active armature's bones targeting selected armature in Pose Mode."""
@@ -277,7 +353,10 @@ class BONEALIGNER_PT_Panel(Panel):
         if context.mode == 'EDIT_ARMATURE':
             layout.operator(BONEALIGNER_OT_AlignActiveToSelected.bl_idname, text="Active to Selected")
             layout.operator(BONEALIGNER_OT_AlignSelectedToActive.bl_idname, text="Selected to Active")
-            layout.label(text="Align all bone properties in Edit Mode.")
+            if len(context.selected_editable_bones) == 2:
+                layout.operator(BONEALIGNER_OT_RenameSelectedToActive.bl_idname, text="Selected to Active Name")
+                layout.operator(BONEALIGNER_OT_RenameActiveToSelected.bl_idname, text="Active to Selected Name")
+            layout.label(text="Align or rename bones in Edit Mode.")
         elif context.mode == 'POSE':
             layout.operator(BONEALIGNER_OT_AlignActiveToSelectedPose.bl_idname, text="Active to Selected")
             layout.operator(BONEALIGNER_OT_AlignSelectedToActivePose.bl_idname, text="Selected to Active")
@@ -288,6 +367,8 @@ def register():
     register_scene_properties()
     bpy.utils.register_class(BONEALIGNER_OT_AlignActiveToSelected)
     bpy.utils.register_class(BONEALIGNER_OT_AlignSelectedToActive)
+    bpy.utils.register_class(BONEALIGNER_OT_RenameSelectedToActive)
+    bpy.utils.register_class(BONEALIGNER_OT_RenameActiveToSelected)
     bpy.utils.register_class(BONEALIGNER_OT_AlignActiveToSelectedPose)
     bpy.utils.register_class(BONEALIGNER_OT_AlignSelectedToActivePose)
     bpy.utils.register_class(BONEALIGNER_OT_ClearConstraints)
@@ -296,6 +377,8 @@ def register():
 def unregister():
     bpy.utils.unregister_class(BONEALIGNER_OT_AlignActiveToSelected)
     bpy.utils.unregister_class(BONEALIGNER_OT_AlignSelectedToActive)
+    bpy.utils.unregister_class(BONEALIGNER_OT_RenameSelectedToActive)
+    bpy.utils.unregister_class(BONEALIGNER_OT_RenameActiveToSelected)
     bpy.utils.unregister_class(BONEALIGNER_OT_AlignActiveToSelectedPose)
     bpy.utils.unregister_class(BONEALIGNER_OT_AlignSelectedToActivePose)
     bpy.utils.unregister_class(BONEALIGNER_OT_ClearConstraints)
