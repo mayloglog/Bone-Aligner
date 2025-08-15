@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Bone Aligner",
     "author": "maylog",
-    "version": (1, 1, 1),
+    "version": (1, 1, 2),
     "blender": (4, 0, 0),
     "location": "Properties > Data > Bone Aligner",
     "description": "Align or rename bones in Edit Mode, or add/clear Copy Transforms constraints in Pose Mode",
@@ -203,7 +203,7 @@ class BONEALIGNER_OT_RenameActiveToSelected(Operator):
 class BONEALIGNER_OT_AlignActiveToSelectedPose(Operator):
     """Add Copy Transforms constraints to active armature's bones targeting selected armature in Pose Mode."""
     bl_idname = "bonealigner.align_active_to_selected_pose"
-    bl_label = "Active to Selected"
+    bl_label = "Active to Selected (Pose)"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -275,7 +275,7 @@ class BONEALIGNER_OT_AlignActiveToSelectedPose(Operator):
 class BONEALIGNER_OT_AlignSelectedToActivePose(Operator):
     """Add Copy Transforms constraints to selected armature's bones targeting active armature in Pose Mode."""
     bl_idname = "bonealigner.align_selected_to_active_pose"
-    bl_label = "Selected to Active"
+    bl_label = "Selected to Active (Pose)"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -334,15 +334,9 @@ class BONEALIGNER_PT_Panel(Panel):
     @classmethod
     def poll(cls, context):
         selected_armatures = [obj for obj in context.selected_objects if obj.type == 'ARMATURE']
-        if context.mode == 'EDIT_ARMATURE':
-            return (context.active_object and
-                    context.active_object.type == 'ARMATURE' and
-                    len(selected_armatures) >= 2)
-        elif context.mode == 'POSE':
-            return (context.active_object and
-                    context.active_object.type == 'ARMATURE' and
-                    len(selected_armatures) >= 1)
-        return False
+        return (context.active_object and
+                context.active_object.type == 'ARMATURE' and
+                len(selected_armatures) >= 1)
 
     def draw(self, context):
         layout = self.layout
@@ -350,18 +344,20 @@ class BONEALIGNER_PT_Panel(Panel):
 
         # Vertical layout for case sensitive and buttons
         layout.prop(scene, "bone_aligner_case_sensitive", text="Case Sensitive")
+        layout.operator(BONEALIGNER_OT_AlignActiveToSelected.bl_idname, text="Active to Selected")
+        layout.operator(BONEALIGNER_OT_AlignSelectedToActive.bl_idname, text="Selected to Active")
+        layout.operator(BONEALIGNER_OT_RenameSelectedToActive.bl_idname, text="Selected to Active Name")
+        layout.operator(BONEALIGNER_OT_RenameActiveToSelected.bl_idname, text="Active to Selected Name")
+        layout.operator(BONEALIGNER_OT_AlignActiveToSelectedPose.bl_idname, text="Active to Selected (Pose)")
+        layout.operator(BONEALIGNER_OT_AlignSelectedToActivePose.bl_idname, text="Selected to Active (Pose)")
+        layout.operator(BONEALIGNER_OT_ClearConstraints.bl_idname, text="Clear Constraints")
+
         if context.mode == 'EDIT_ARMATURE':
-            layout.operator(BONEALIGNER_OT_AlignActiveToSelected.bl_idname, text="Active to Selected")
-            layout.operator(BONEALIGNER_OT_AlignSelectedToActive.bl_idname, text="Selected to Active")
-            if len(context.selected_editable_bones) == 2:
-                layout.operator(BONEALIGNER_OT_RenameSelectedToActive.bl_idname, text="Selected to Active Name")
-                layout.operator(BONEALIGNER_OT_RenameActiveToSelected.bl_idname, text="Active to Selected Name")
             layout.label(text="Align or rename bones in Edit Mode.")
         elif context.mode == 'POSE':
-            layout.operator(BONEALIGNER_OT_AlignActiveToSelectedPose.bl_idname, text="Active to Selected")
-            layout.operator(BONEALIGNER_OT_AlignSelectedToActivePose.bl_idname, text="Selected to Active")
-            layout.operator(BONEALIGNER_OT_ClearConstraints.bl_idname, text="Clear Constraints")
             layout.label(text="Add or clear constraints in Pose Mode. Select bones and press Alt to change constraint space.")
+        else:
+            layout.label(text="Enter Edit or Pose Mode to enable buttons.")
 
 def register():
     register_scene_properties()
